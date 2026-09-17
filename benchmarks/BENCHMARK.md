@@ -181,6 +181,71 @@ couple of matmuls plus a log over host-resident inputs) on the CPU rather than
 uploading it, which for its size is the faster choice. Reproduce with
 `scripts/bench_metal_dw.sh <model.gguf> <clip.wav>`.
 
+## AMD: ROCm vs Vulkan
+
+On AMD hardware parakeet.cpp can use either ggml backend: HIP/ROCm
+(`-DPARAKEET_GGML_HIP=ON`) or Vulkan (`-DPARAKEET_GGML_VULKAN=ON`). Both are
+built as container variants from the repo [`Dockerfile`](../Dockerfile); see the
+Docker section of the README for the exact build args.
+
+AMD Radeon 780M (gfx1103, RDNA3 integrated GPU in a Ryzen 9 7940HS), Linux 7.2.4,
+ROCm 7.2 / Mesa RADV. 100 LibriSpeech `test-clean` clips (901 s of audio), TDT
+decoder, 8 threads, via `parakeet-cli bench` — model load and the warmup clip are
+excluded, so these are steady-state numbers. RTFx is audio seconds per second of
+compute; higher is faster.
+
+| Model | ROCm | Vulkan | Winner |
+|---|---:|---:|---|
+| tdt_ctc-110m q8_0 | **121.7** | 90.3 | ROCm 1.35× |
+| tdt_ctc-110m f16  | **122.7** | 88.1 | ROCm 1.39× |
+| tdt-0.6b-v2 q8_0  | 45.0 | **49.1** | Vulkan 1.09× |
+| tdt-0.6b-v2 f16   | **49.5** | 44.0 | ROCm 1.12× |
+| tdt-1.1b q8_0     | 29.6 | **31.2** | Vulkan 1.06× |
+| tdt-1.1b f16      | **32.4** | 29.2 | ROCm 1.11× |
+
+ROCm wins clearly on the small 110m model (about 1.35×), where per-run fixed
+costs dominate and its lower dispatch overhead — plus CUDA-graph capture, which
+ggml's HIP backend inherits from the CUDA one and Vulkan has no equivalent for —
+pays off most. On the 0.6b and 1.1b models the two backends are within about 10%
+of each other and the winner flips with the weight format: ROCm takes f16, Vulkan
+takes q8_0. That split is consistent across both models, which fits rocBLAS being
+well tuned for f16 GEMM while ggml's Vulkan quantized matmul shaders hold their
+own on the q8_0 path.
+
+Practical read: on an RDNA3 iGPU either backend is a reasonable default. ROCm is
+worth the much larger image if you run the small models or f16 weights; Vulkan is
+the better deal otherwise — a 416 MB image against roughly 10 GB, no ROCm install
+on the host, and it works on Intel and NVIDIA GPUs too.
+
+Transcripts agree between the backends on 91 of 100 clips at worst (0 of 100 on
+the larger f16 models); every divergence inspected was punctuation or a
+near-homophone spelling (`Carpatius` / `Carpatios`), i.e. ordinary floating-point
+non-determinism, not a correctness difference.
+
+### Reproducing, and the gfx1103 caveat
+
+ROCm 7.2's rocBLAS ships no `gfx1103` Tensile kernel library (it has gfx1030,
+gfx1100, gfx1101, gfx1102, gfx1150+), so a build targeting gfx1103 configures and
+compiles fine and then dies at the first GEMM:
+
+```
+rocBLAS error: Cannot read /opt/rocm/lib/rocblas/library/TensileLibrary.dat:
+Illegal seek for GPU arch : gfx1103
+```
+
+Build for `gfx1102` instead — same RDNA3 ISA — and run with
+`HSA_OVERRIDE_GFX_VERSION=11.0.2` so the HSA runtime reports gfx1102 and rocBLAS
+finds its kernels. The override alone is not enough: the ggml code objects have
+to be compiled for the arch the device reports, so the build target and the
+override must agree. These measurements use that pairing.
+
+Ordering caveat: on a laptop iGPU the first run of a sweep is consistently the
+fastest, so whichever backend runs first in each pair gets an advantage. The
+numbers above are the best of 6 runs per (backend, model), collected as two
+counter-balanced sweeps of 3 — one with ROCm first, one with Vulkan first. Every
+row picked the same winner in both sweeps, so the ordering does not drive any of
+these results.
+
 ## Plots
 
 ### RTFx per model — NeMo vs ours (all dtypes), LibriSpeech

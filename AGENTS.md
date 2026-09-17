@@ -134,7 +134,7 @@ cmake -B build -DPARAKEET_BUILD_TESTS=ON -DGGML_NATIVE=ON && cmake --build build
 | `PARAKEET_GGML_CUDA`     | OFF     | Forward GGML_CUDA to the submodule         |
 | `PARAKEET_GGML_METAL`    | OFF     | Forward GGML_METAL to the submodule        |
 | `PARAKEET_GGML_VULKAN`   | OFF     | Forward GGML_VULKAN to the submodule       |
-| `PARAKEET_GGML_HIPBLAS`  | OFF     | Forward GGML_HIPBLAS to the submodule      |
+| `PARAKEET_GGML_HIP`      | OFF     | Forward GGML_HIP (ROCm) to the submodule   |
 
 Use `-DGGML_NATIVE=OFF` when building for CI or portable binaries.
 

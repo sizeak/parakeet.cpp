@@ -159,6 +159,51 @@ The CUDA image is built on CUDA 13, so it covers everything from Turing up throu
 
 To build the images yourself, see the build args at the top of the [`Dockerfile`](Dockerfile); the cli is the default target and the server is `--target runtime-server`. The CPU image is the portable `GGML_NATIVE=OFF` build, so it runs on any amd64 or arm64 host.
 
+The same Dockerfile also builds Vulkan and ROCm images. These are not published to
+GHCR (only cpu and cuda are), so build them locally:
+
+```sh
+# Vulkan: any GPU with a Vulkan 1.2 driver -- AMD, Intel, NVIDIA, integrated included.
+docker build -t parakeet.cpp:vulkan \
+  --build-arg "BUILD_PACKAGES=libvulkan-dev glslc spirv-headers" \
+  --build-arg "RUNTIME_PACKAGES=libvulkan1 mesa-vulkan-drivers" \
+  --build-arg "CMAKE_EXTRA_ARGS=-DPARAKEET_GGML_VULKAN=ON" .
+
+docker run --rm --device /dev/dri \
+  -v "$PWD/models:/models:ro" -v "$PWD/audio:/audio:ro" \
+  parakeet.cpp:vulkan \
+  transcribe --model /models/parakeet-tdt_ctc-110m-q8_0.gguf --input /audio/speech.wav --decoder tdt
+
+# ROCm/HIP: AMD only. Set GPU_TARGETS to the cards you actually target -- every
+# extra arch recompiles the whole HIP kernel set, so the build time scales with
+# the list. `rocminfo | grep gfx` prints your card's arch (but read the gfx1103
+# note below before targeting a Phoenix APU).
+docker build -t parakeet.cpp:rocm \
+  --build-arg BUILD_BASE=rocm/dev-ubuntu-24.04:7.2-complete \
+  --build-arg RUNTIME_BASE=rocm/dev-ubuntu-24.04:7.2 \
+  --build-arg "RUNTIME_PACKAGES=rocblas hipblas" \
+  --build-arg "GPU_TARGETS=gfx1030;gfx1100;gfx1101;gfx1102" \
+  --build-arg "CMAKE_EXTRA_ARGS=-DPARAKEET_GGML_HIP=ON -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++" .
+
+docker run --rm --device /dev/kfd --device /dev/dri \
+  --group-add video --group-add render --security-opt seccomp=unconfined \
+  -v "$PWD/models:/models:ro" -v "$PWD/audio:/audio:ro" \
+  parakeet.cpp:rocm \
+  transcribe --model /models/parakeet-tdt_ctc-110m-q8_0.gguf --input /audio/speech.wav --decoder tdt
+```
+
+rocBLAS does not ship kernels for every arch HIP can compile for. `gfx1103`
+(Radeon 780M and the other Phoenix APUs) is one of the gaps as of ROCm 7.2: the
+build succeeds, then the first matmul fails with `Cannot read
+.../TensileLibrary.dat ... for GPU arch : gfx1103`. Build for `gfx1102` (same
+RDNA3 ISA) and add `-e HSA_OVERRIDE_GFX_VERSION=11.0.2` to the `docker run`, so
+the device reports gfx1102 and rocBLAS finds its kernels. `GPU_TARGETS` and the
+override have to agree — the override on its own does not help.
+
+On AMD both backends work and either is a valid choice; which one wins depends on
+the card and the model size. See [AMD: ROCm vs Vulkan](benchmarks/BENCHMARK.md#amd-rocm-vs-vulkan)
+for a measured comparison on a Radeon 780M (RDNA3 iGPU).
+
 ---
 
 ## Python environment setup
