@@ -13,3 +13,6 @@ benchmarks/audio/
 benchmarks/models/
 # Benchmark manifests ARE committed (small text, contain ground-truth refs)
 !benchmarks/*_manifest.tsv
+
+# Local compose overrides (see .env.example)
+.env

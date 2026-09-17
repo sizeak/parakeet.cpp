@@ -219,25 +219,32 @@ tdt_ctc-110m. See
 [AMD: ROCm vs Vulkan](benchmarks/BENCHMARK.md#amd-rocm-vs-vulkan) for both
 measurements on a Radeon 780M, plus a speed-vs-WER table for choosing a model.
 
-### Running the server under systemd
+### Running the server persistently
 
-[`packaging/systemd/`](packaging/systemd/) has a user unit that runs
-`parakeet-server` from one of these images, with the backend selected by an
-environment file so switching is an edit plus a restart:
+[`compose.yaml`](compose.yaml) defines the server once per backend, as two
+profiles:
 
 ```sh
-mkdir -p ~/.config/systemd/user
-cp packaging/systemd/parakeet-server.service ~/.config/systemd/user/
-cp packaging/systemd/parakeet-server.env     ~/.config/parakeet-server.env
-$EDITOR ~/.config/parakeet-server.env    # backend, model, port, models dir
-systemctl --user daemon-reload
-systemctl --user enable --now parakeet-server
+docker compose --profile vulkan up -d --build   # recommended
+docker compose --profile rocm   up -d --build   # AMD only
+docker compose --profile vulkan down
 ```
 
-GPU device nodes are owned by the host, so your user needs the right groups
-(`sudo usermod -aG video,render $USER`, then log back in). To keep the service
-running when you are not logged in, `sudo loginctl enable-linger $USER`.
-Logs are `journalctl --user -u parakeet-server -f`.
+Both profiles share a container name and port, so exactly one runs at a time and
+switching backend is `down` then `up` with the other profile. `restart:
+unless-stopped` means docker brings the container back when the daemon starts
+(so, at boot) and leaves it down if you stopped it deliberately — docker
+supervises the container directly, so `mem_limit` and friends apply to it.
+
+Model, port and models directory come from the environment; copy
+[`.env.example`](.env.example) to `.env` to change them, or set them inline:
+
+```sh
+PARAKEET_MODEL=tdt_ctc-110m-q8_0.gguf docker compose --profile vulkan up -d
+```
+
+GPU device nodes are owned by the host, so your user needs the right groups for
+the ROCm profile (`sudo usermod -aG video,render $USER`, then log back in).
 
 ---
 

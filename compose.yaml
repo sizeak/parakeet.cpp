@@ -1,0 +1,73 @@
+# parakeet.cpp OpenAI-compatible server, one profile per GPU backend.
+#
+#   docker compose --profile vulkan up -d --build     # recommended
+#   docker compose --profile rocm   up -d --build     # AMD only
+#   docker compose --profile vulkan down
+#
+# Both profiles share a container name and port, so only one runs at a time --
+# switching backends is `down` then `up` with the other profile.
+#
+# `restart: unless-stopped` means the container comes back when dockerd starts
+# (i.e. at boot), and stays down if you stopped it deliberately. Unlike a
+# systemd unit wrapping `docker run`, docker supervises the container directly,
+# so `deploy.resources` / `mem_limit` actually apply to it.
+#
+# Settings come from the environment, so a `.env` beside this file (see
+# .env.example) or an inline override is enough to change model or port:
+#   PARAKEET_MODEL=tdt_ctc-110m-q8_0.gguf docker compose --profile vulkan up -d
+
+name: parakeet
+
+x-server: &server
+  container_name: parakeet-server
+  restart: unless-stopped
+  ports:
+    - "${PARAKEET_PORT:-8080}:8080"
+  volumes:
+    - "${PARAKEET_MODELS_DIR:-./models}:/models:ro"
+  command: ["--model", "/models/${PARAKEET_MODEL:-tdt-1.1b-q8_0.gguf}"]
+
+services:
+  # Recommended backend: faster than ROCm on long-form audio, ~25x smaller
+  # image, and needs nothing on the host but a Vulkan driver.
+  vulkan:
+    <<: *server
+    profiles: ["vulkan"]
+    image: parakeet.cpp:vulkan-server
+    build:
+      context: .
+      target: runtime-server
+      args:
+        BUILD_PACKAGES: "libvulkan-dev glslc spirv-headers"
+        RUNTIME_PACKAGES: "libvulkan1 mesa-vulkan-drivers"
+        CMAKE_EXTRA_ARGS: "-DPARAKEET_GGML_VULKAN=ON"
+    devices:
+      - /dev/dri
+
+  # AMD only. GPU_TARGETS defaults to the documented multi-arch list; override
+  # it with your own arch for a much faster build. On a gfx1103 Phoenix APU
+  # (Radeon 780M) build gfx1102 and keep HSA_OVERRIDE_GFX_VERSION below -- see
+  # the gfx1103 note in the README.
+  rocm:
+    <<: *server
+    profiles: ["rocm"]
+    image: parakeet.cpp:rocm-server
+    build:
+      context: .
+      target: runtime-server
+      args:
+        BUILD_BASE: "rocm/dev-ubuntu-24.04:7.2-complete"
+        RUNTIME_BASE: "rocm/dev-ubuntu-24.04:7.2"
+        RUNTIME_PACKAGES: "rocblas hipblas"
+        GPU_TARGETS: "${PARAKEET_GPU_TARGETS:-gfx1030;gfx1100;gfx1101;gfx1102}"
+        CMAKE_EXTRA_ARGS: "-DPARAKEET_GGML_HIP=ON -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++"
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.2"
