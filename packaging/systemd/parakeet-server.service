@@ -1,0 +1,57 @@
+# parakeet-server as a systemd *user* service, running the container image built
+# from the repo Dockerfile.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/systemd/parakeet-server.service ~/.config/systemd/user/
+#   cp packaging/systemd/parakeet-server.env     ~/.config/parakeet-server.env
+#   $EDITOR ~/.config/parakeet-server.env        # pick backend, model, port
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now parakeet-server
+#
+# To survive logout / start at boot without a login session:
+#   sudo loginctl enable-linger $USER
+#
+# GPU access needs your user in the right groups (the container runs as root
+# internally, but the device nodes are owned by the host):
+#   sudo usermod -aG video,render $USER    # then log out and back in
+#
+# Logs:   journalctl --user -u parakeet-server -f
+# Switch backend: edit ~/.config/parakeet-server.env, then
+#   systemctl --user restart parakeet-server
+
+[Unit]
+Description=parakeet.cpp OpenAI-compatible transcription server
+Documentation=https://github.com/mudler/parakeet.cpp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# %h expands here (it does NOT expand inside EnvironmentFile).
+Environment=PARAKEET_MODELS_DIR=%h/models
+Environment=PARAKEET_PORT=8080
+EnvironmentFile=%h/.config/parakeet-server.env
+
+# Remove a stale container from an unclean shutdown before starting.
+ExecStartPre=-/usr/bin/docker rm -f parakeet-server
+
+# --rm plus a foreground container: systemd tracks the docker client process and
+# --sig-proxy forwards its signals, so `systemctl stop` stops the container
+# rather than orphaning it.
+ExecStart=/usr/bin/docker run --rm --name parakeet-server \
+    --sig-proxy=true \
+    -p ${PARAKEET_PORT}:8080 \
+    -v ${PARAKEET_MODELS_DIR}:/models:ro \
+    $PARAKEET_GPU_ARGS \
+    ${PARAKEET_IMAGE} \
+    --model /models/${PARAKEET_MODEL}
+
+ExecStop=/usr/bin/docker stop parakeet-server
+
+Restart=on-failure
+RestartSec=5s
+# Pulling/starting a large image plus the first model load can be slow.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

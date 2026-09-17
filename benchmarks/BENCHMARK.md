@@ -212,15 +212,65 @@ takes q8_0. That split is consistent across both models, which fits rocBLAS bein
 well tuned for f16 GEMM while ggml's Vulkan quantized matmul shaders hold their
 own on the q8_0 path.
 
-Practical read: on an RDNA3 iGPU either backend is a reasonable default. ROCm is
-worth the much larger image if you run the small models or f16 weights; Vulkan is
-the better deal otherwise — a 416 MB image against roughly 10 GB, no ROCm install
-on the host, and it works on Intel and NVIDIA GPUs too.
+Do not generalise this to long-form audio: the picture inverts completely on a
+single long recording — see [Long-form: one 5-minute file](#long-form-one-5-minute-file)
+below. These 100-clip numbers are dominated by per-run fixed costs, which is
+exactly where ROCm's advantage lies.
 
 Transcripts agree between the backends on 91 of 100 clips at worst (0 of 100 on
 the larger f16 models); every divergence inspected was punctuation or a
 near-homophone spelling (`Carpatius` / `Carpatios`), i.e. ordinary floating-point
 non-determinism, not a correctness difference.
+
+### Long-form: one 5-minute file
+
+The table above uses 100 short clips (9 s mean), so it measures per-clip fixed
+costs as much as throughput. Transcribing one continuous recording is a different
+workload: a single dispatch sequence, with the fixed costs amortised over five
+minutes of audio instead of paid a hundred times.
+
+Same machine and models, one 297.5 s file (42 LibriSpeech clips concatenated),
+best of 3, backend order alternating per repeat:
+
+| Model | ROCm | Vulkan | Faster |
+|---|---:|---:|---|
+| tdt_ctc-110m q8_0 | 5.79 s | **5.52 s** | Vulkan 1.05× |
+| tdt_ctc-110m f16  | 5.64 s | **5.52 s** | Vulkan 1.02× |
+| tdt-0.6b-v2 q8_0  | 13.05 s | **9.27 s** | Vulkan 1.41× |
+| tdt-0.6b-v2 f16   | 11.66 s | **9.59 s** | Vulkan 1.22× |
+| tdt-1.1b q8_0     | 21.86 s | **14.16 s** | Vulkan 1.54× |
+| tdt-1.1b f16      | 19.51 s | **14.73 s** | Vulkan 1.32× |
+
+Vulkan wins every row, and the margin *grows* with model size — the exact
+opposite of the short-clip result. With one long clip there is no per-run
+overhead left to amortise, so raw kernel throughput decides it, and ggml's Vulkan
+shaders beat rocBLAS on this iGPU. ROCm's short-clip lead came from lower
+dispatch overhead and CUDA-graph replay, neither of which helps here.
+
+Run-to-run spread is also much tighter than on the short-clip sweep (about
+±0.3 s, versus swings of 20% there), so this is the more reliable of the two
+measurements. For long-form transcription on RDNA3, prefer Vulkan: it is faster,
+the image is 416 MB against roughly 10 GB, and it needs no ROCm on the host.
+
+### Model choice: speed against accuracy
+
+WER is measured against the LibriSpeech `test-clean` ground truth carried in
+`benchmarks/librispeech_manifest.tsv` (100 clips, normalised), decoded on Vulkan.
+Wall time is the 5-minute file above.
+
+| Model | 5 min takes | WER |
+|---|---:|---:|
+| tdt_ctc-110m q8_0 | 5.5 s | 2.08 % |
+| tdt_ctc-110m f16  | 5.5 s | 2.08 % |
+| tdt-0.6b-v2 q8_0  | 9.3 s | 1.95 % |
+| tdt-0.6b-v2 f16   | 9.6 s | 1.91 % |
+| tdt-1.1b q8_0     | 14.2 s | **1.06 %** |
+| tdt-1.1b f16      | 14.7 s | 1.10 % |
+
+The 0.6b models are poor value on this hardware: 68% slower than the 110m for
+0.13 points of WER. The real choice is the 110m (fastest, 2.08%) or the 1.1b
+(halves the error rate, still 21× faster than realtime). f16 buys nothing over
+q8_0 on the 1.1b — it is slower and, within noise, no more accurate.
 
 ### Reproducing, and the gfx1103 caveat
 

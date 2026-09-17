@@ -200,9 +200,34 @@ RDNA3 ISA) and add `-e HSA_OVERRIDE_GFX_VERSION=11.0.2` to the `docker run`, so
 the device reports gfx1102 and rocBLAS finds its kernels. `GPU_TARGETS` and the
 override have to agree — the override on its own does not help.
 
-On AMD both backends work and either is a valid choice; which one wins depends on
-the card and the model size. See [AMD: ROCm vs Vulkan](benchmarks/BENCHMARK.md#amd-rocm-vs-vulkan)
-for a measured comparison on a Radeon 780M (RDNA3 iGPU).
+Both images above build the cli. Add `--target runtime-server` (and a
+`-server` tag) to build the HTTP server instead.
+
+On AMD both backends work. For long-form audio Vulkan is the faster of the two
+on RDNA3 — and the gap widens with model size — while ROCm's advantage on the
+100-short-clip benchmark comes from per-clip fixed costs. See
+[AMD: ROCm vs Vulkan](benchmarks/BENCHMARK.md#amd-rocm-vs-vulkan) for both
+measurements on a Radeon 780M, plus a speed-vs-WER table for choosing a model.
+
+### Running the server under systemd
+
+[`packaging/systemd/`](packaging/systemd/) has a user unit that runs
+`parakeet-server` from one of these images, with the backend selected by an
+environment file so switching is an edit plus a restart:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp packaging/systemd/parakeet-server.service ~/.config/systemd/user/
+cp packaging/systemd/parakeet-server.env     ~/.config/parakeet-server.env
+$EDITOR ~/.config/parakeet-server.env    # backend, model, port, models dir
+systemctl --user daemon-reload
+systemctl --user enable --now parakeet-server
+```
+
+GPU device nodes are owned by the host, so your user needs the right groups
+(`sudo usermod -aG video,render $USER`, then log back in). To keep the service
+running when you are not logged in, `sudo loginctl enable-linger $USER`.
+Logs are `journalctl --user -u parakeet-server -f`.
 
 ---
 
