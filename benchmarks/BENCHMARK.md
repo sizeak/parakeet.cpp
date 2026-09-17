@@ -241,16 +241,50 @@ best of 3, backend order alternating per repeat:
 | tdt-1.1b q8_0     | 21.86 s | **14.16 s** | Vulkan 1.54× |
 | tdt-1.1b f16      | 19.51 s | **14.73 s** | Vulkan 1.32× |
 
-Vulkan wins every row, and the margin *grows* with model size — the exact
-opposite of the short-clip result. With one long clip there is no per-run
-overhead left to amortise, so raw kernel throughput decides it, and ggml's Vulkan
-shaders beat rocBLAS on this iGPU. ROCm's short-clip lead came from lower
-dispatch overhead and CUDA-graph replay, neither of which helps here.
+Vulkan wins every row, and by more on the larger models — the exact opposite of
+the short-clip result. With one long clip there is no per-run overhead left to
+amortise, so raw kernel throughput decides it, and ggml's Vulkan shaders beat
+rocBLAS on this iGPU. ROCm's short-clip lead came from lower dispatch overhead
+and CUDA-graph replay, neither of which helps here. The exact margin moves with
+thermal state (see the crossover table below, where a hotter chip narrows it),
+but the ordering is stable.
 
 Run-to-run spread is also much tighter than on the short-clip sweep (about
 ±0.3 s, versus swings of 20% there), so this is the more reliable of the two
 measurements. For long-form transcription on RDNA3, prefer Vulkan: it is faster,
 the image is 416 MB against roughly 10 GB, and it needs no ROCm on the host.
+
+### Where the crossover sits
+
+The two tables above disagree because they measure different things, so the
+useful question is how long a clip has to be before Vulkan takes the lead. Same
+two backends, q8_0 weights, one file per row, best of 3 with the backend order
+alternating:
+
+| Clip | tdt_ctc-110m ROCm | Vulkan | | tdt-1.1b ROCm | Vulkan |
+|---|---:|---:|---|---:|---:|
+| 15 s   | **0.12 s** | 0.19 s | | **0.45 s** | 0.60 s |
+| 30 s   | **0.25 s** | 0.33 s | | 1.08 s | **0.85 s** |
+| 60 s   | **0.55 s** | 0.66 s | | 2.40 s | **1.99 s** |
+| 120 s  | **1.41 s** | 1.49 s | | 5.72 s | **4.41 s** |
+| 297 s  | 5.71 s | **5.47 s** | | 23.00 s | **19.82 s** |
+
+The crossover is model-dependent. On tdt-1.1b it sits between 15 s and 30 s, and
+past it Vulkan holds a steady 1.16–1.30× lead. On the small tdt_ctc-110m, ROCm
+stays ahead until roughly two minutes and Vulkan's eventual win is only 1.04×, so
+for short-clip work on small models ROCm is the better backend and for anything
+else Vulkan is.
+
+That fits the mechanism: ROCm's edge is a fixed per-run saving (lower dispatch
+overhead, CUDA-graph replay), so it dominates while total compute is small and is
+swamped once there is enough work to amortise it. The 110m does so little compute
+per second of audio that it takes minutes to get there; the 1.1b gets there in
+seconds.
+
+Absolute times in this table run slower than the dedicated long-form table above
+— the sweep does far more back-to-back GPU work before reaching the long clips,
+so the chip is hotter. Read it for the trend and the ratios, which are measured
+under matched conditions, not for wall-clock.
 
 ### Model choice: speed against accuracy
 

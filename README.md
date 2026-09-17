@@ -160,10 +160,16 @@ The CUDA image is built on CUDA 13, so it covers everything from Turing up throu
 To build the images yourself, see the build args at the top of the [`Dockerfile`](Dockerfile); the cli is the default target and the server is `--target runtime-server`. The CPU image is the portable `GGML_NATIVE=OFF` build, so it runs on any amd64 or arm64 host.
 
 The same Dockerfile also builds Vulkan and ROCm images. These are not published to
-GHCR (only cpu and cuda are), so build them locally:
+GHCR (only cpu and cuda are), so build them locally. **Vulkan is the recommended
+GPU backend**, including on AMD: on the larger models it is faster than ROCm from
+about 30 s of audio upward, the image is roughly 25× smaller, and it needs
+nothing installed on the host beyond a driver. ROCm leads on short clips (and, on
+the small 110m model, up to a couple of minutes), so measure first if that is
+your workload.
 
 ```sh
-# Vulkan: any GPU with a Vulkan 1.2 driver -- AMD, Intel, NVIDIA, integrated included.
+# Vulkan (recommended): any GPU with a Vulkan 1.2 driver -- AMD, Intel, NVIDIA,
+# integrated included.
 docker build -t parakeet.cpp:vulkan \
   --build-arg "BUILD_PACKAGES=libvulkan-dev glslc spirv-headers" \
   --build-arg "RUNTIME_PACKAGES=libvulkan1 mesa-vulkan-drivers" \
@@ -174,7 +180,9 @@ docker run --rm --device /dev/dri \
   parakeet.cpp:vulkan \
   transcribe --model /models/parakeet-tdt_ctc-110m-q8_0.gguf --input /audio/speech.wav --decoder tdt
 
-# ROCm/HIP: AMD only. Set GPU_TARGETS to the cards you actually target -- every
+# ROCm/HIP: AMD only, and worth it only if you have measured it winning on your
+# own card and clip lengths -- it trails Vulkan on long-form audio.
+# Set GPU_TARGETS to the cards you actually target -- every
 # extra arch recompiles the whole HIP kernel set, so the build time scales with
 # the list. `rocminfo | grep gfx` prints your card's arch (but read the gfx1103
 # note below before targeting a Phoenix APU).
@@ -203,9 +211,11 @@ override have to agree — the override on its own does not help.
 Both images above build the cli. Add `--target runtime-server` (and a
 `-server` tag) to build the HTTP server instead.
 
-On AMD both backends work. For long-form audio Vulkan is the faster of the two
-on RDNA3 — and the gap widens with model size — while ROCm's advantage on the
-100-short-clip benchmark comes from per-clip fixed costs. See
+Both backends work on AMD, and Vulkan is the default recommendation. On RDNA3 it
+wins on long-form audio, while ROCm leads on short clips, where per-run fixed
+costs dominate rather than throughput. Where that crossover sits depends on the
+model: about 30 s for tdt-1.1b, but roughly two minutes for the small
+tdt_ctc-110m. See
 [AMD: ROCm vs Vulkan](benchmarks/BENCHMARK.md#amd-rocm-vs-vulkan) for both
 measurements on a Radeon 780M, plus a speed-vs-WER table for choosing a model.
 

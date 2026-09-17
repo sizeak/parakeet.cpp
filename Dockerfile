@@ -19,18 +19,23 @@
 #       --build-arg RUNTIME_BASE=nvidia/cuda:13.0.1-runtime-ubuntu24.04 \
 #       --build-arg "CMAKE_EXTRA_ARGS=-DPARAKEET_GGML_CUDA=ON -DGGML_CUDA_NO_VMM=ON" .
 #
-#   Vulkan (runs on any GPU with a Vulkan 1.2 driver -- AMD, Intel, NVIDIA,
-#   including integrated ones. The build needs the loader/headers, glslc from
-#   shaderc to compile the compute shaders, and the SPIR-V registry headers;
-#   the runtime needs the loader plus an ICD, here Mesa's RADV/ANV):
+#   Vulkan (the recommended GPU backend: runs on any GPU with a Vulkan 1.2
+#   driver -- AMD, Intel, NVIDIA, including integrated ones -- and on AMD it is
+#   the faster of the two on long-form audio, from a far smaller image. The
+#   build needs the loader/headers, glslc from shaderc to compile the
+#   compute shaders, and the SPIR-V registry headers; the runtime needs the
+#   loader plus an ICD, here Mesa's RADV/ANV):
 #     docker build -t parakeet.cpp:vulkan \
 #       --build-arg "BUILD_PACKAGES=libvulkan-dev glslc spirv-headers" \
 #       --build-arg "RUNTIME_PACKAGES=libvulkan1 mesa-vulkan-drivers" \
 #       --build-arg "CMAKE_EXTRA_ARGS=-DPARAKEET_GGML_VULKAN=ON" .
 #     docker run --rm --device /dev/dri ... parakeet.cpp:vulkan
 #
-#   ROCm/HIP (AMD only. Faster than Vulkan on small models and on f16 weights, a
-#   little slower on quantized larger ones -- see benchmarks/BENCHMARK.md. The
+#   ROCm/HIP (AMD only, and the niche option: it leads Vulkan on short clips,
+#   where per-run fixed costs dominate, and loses on long-form audio. The
+#   crossover is model-dependent -- around 30 s for tdt-1.1b, nearer two minutes
+#   for the small tdt_ctc-110m -- so prefer Vulkan unless short clips are your
+#   workload and you have measured it. See benchmarks/BENCHMARK.md. The
 #   -complete dev image carries the full HIP toolchain; the runtime image is the
 #   slim one plus just the two math libraries ggml-hip links against.
 #   GPU_TARGETS is the AMD arch list -- keep it to the cards you actually
